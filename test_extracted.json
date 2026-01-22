@@ -1,0 +1,154 @@
+{
+  "success": true,
+  "document_type": null,
+  "data": {
+    "document_type": "driving_license",
+    "confidence": 0.6923076923076924,
+    "field_confidence": {
+      "last_name": 0.9,
+      "first_name": 0.9,
+      "date_of_birth": 0.85,
+      "issue_date": 0.85,
+      "expiry_date": 0.9,
+      "license_number": 0.9
+    },
+    "extracted_at": "2026-01-22T17:45:50.334501",
+    "raw_text": "9 A1A2B\nPATENTE DI GUIDA — REPUBBLICA ITALIANA\n1. SCALONE\n2. DAVIDE\n3. 15/11/02. MASSAFRA (TA)\n4a. 19/06/2021 4c. MC-TA\n4b. 15/11/2031\n5. TA5418408X",
+    "metadata": {
+      "extraction_method": "layout_rules",
+      "structured_patterns_found": true,
+      "decision": {
+        "certification_ready": false,
+        "human_review_required": true,
+        "reason": "below_profile_threshold",
+        "risk_level": "medium",
+        "confidence": 0.6923076923076924,
+        "details": {
+          "current_confidence": 0.6923076923076924,
+          "required_confidence": 0.85,
+          "profile": "driving_license_minimal"
+        }
+      },
+      "risk_level": "medium",
+      "certification_profile": "auto"
+    },
+    "certification_ready": false,
+    "human_review_required": true,
+    "trusted_source": "layout_rules",
+    "missing_fields": [],
+    "first_name": "DAVIDE",
+    "last_name": "SCALONE",
+    "full_name": null,
+    "date_of_birth": "2002-11-15T00:00:00",
+    "place_of_birth": null,
+    "license_number": "TA5418408X",
+    "issue_date": "2021-06-19T00:00:00",
+    "expiry_date": "2031-11-15T00:00:00",
+    "issuing_authority": null,
+    "categories": null,
+    "address": null
+  },
+  "validation": {
+    "certification_ready": false,
+    "human_review_required": true,
+    "errors": [],
+    "warnings": [],
+    "confidence": 0.6923076923076924,
+    "missing_fields": [],
+    "trusted_source": "layout_rules",
+    "reason": "validation_failed"
+  },
+  "certification_ready": false,
+  "human_review_required": true,
+  "metadata": {
+    "text_length": 148,
+    "text_preview": "9 A1A2B\nPATENTE DI GUIDA — REPUBBLICA ITALIANA\n1. SCALONE\n2. DAVIDE\n3. 15/11/02. MASSAFRA (TA)\n4a. 19/06/2021 4c. MC-TA\n4b. 15/11/2031\n5. TA5418408X",
+    "family_confidence": 0.7692307692307693,
+    "family_source": "layout",
+    "co_occurrence_boost": 0.0,
+    "claim_evaluation": {
+      "is_contractor_relationship": false,
+      "claims_confidence": 0.0,
+      "claims_found": {
+        "has_client": false,
+        "has_contractor": false,
+        "references_master_agreement": false,
+        "defines_scope_of_work": false,
+        "has_effective_date": false,
+        "defines_services": false
+      },
+      "claim_scores": {
+        "has_client": 0,
+        "has_contractor": 0,
+        "references_master_agreement": 0,
+        "defines_scope_of_work": 0,
+        "has_effective_date": 0,
+        "defines_services": 0
+      },
+      "certifiable": false,
+      "critical_claims_present": false,
+      "supporting_claims_count": 0
+    },
+    "policy_decision": {
+      "certifiable": true,
+      "policy": "driving_license_minimal",
+      "requires_extraction": true,
+      "trusted_sources": [
+        "layout_rules"
+      ],
+      "min_confidence": 0.5,
+      "human_review_required": true,
+      "reason": "driving_license_policy",
+      "details": {
+        "family": "driving_license",
+        "family_confidence": 0.7692307692307693,
+        "source_warning": null
+      }
+    },
+    "role_inference": {
+      "role": "unknown",
+      "confidence": 0.0,
+      "evidence_type": "none",
+      "signals": []
+    },
+    "claim_statement": "MC-TA is a unknown for MASSAFRA (None 4.00)",
+    "canonical_hash": null,
+    "hash_generation_blocked": "Document not certification ready",
+    "decision": {
+      "can_certify": false,
+      "needs_human": true,
+      "confidence": 0.6923076923076924,
+      "risk_level": "medium",
+      "reason": "below_profile_threshold",
+      "trusted_source": "layout_rules",
+      "missing_fields": [],
+      "details": {
+        "current_confidence": 0.6923076923076924,
+        "required_confidence": 0.85,
+        "profile": "driving_license_minimal"
+      },
+      "certification_method": "standard"
+    }
+  },
+  "errors": [],
+  "document_family": "driving_license",
+  "document_subtype": "unknown",
+  "certification_policy": "driving_license_minimal",
+  "inferred_role": "unknown",
+  "claim": {
+    "subject": "MC-TA",
+    "role": "unknown",
+    "entity": "MASSAFRA",
+    "start_date": null,
+    "end_date": null,
+    "amount": 4.0,
+    "currency": null,
+    "services": null,
+    "evidence_type": "soft",
+    "confidence": 0.3,
+    "raw_text": "9 A1A2B\nPATENTE DI GUIDA — REPUBBLICA ITALIANA\n1. SCALONE\n2. DAVIDE\n3. 15/11/02. MASSAFRA (TA)\n4a. 19/06/2021 4c. MC-TA\n4b. 15/11/2031\n5. TA5418408X",
+    "extraction_method": "ner"
+  },
+  "risk_level": "medium",
+  "certification_profile": "auto"
+}

@@ -1,0 +1,112 @@
+{
+  "success": true,
+  "document_type": null,
+  "data": null,
+  "validation": null,
+  "certification_ready": true,
+  "human_review_required": false,
+  "metadata": {
+    "text_length": 1361,
+    "text_preview": "ENGAGEMENT LETTER\nEXAMPLE COMPANY\nvia jacca 6, san giorgio ionico, California, 74027\nDear Franco,\nThis Engagement Letter (“Letter”), dated 2026-01-21, confirms the services requested by Franco\n(“Clien...",
+    "family_confidence": 0.7,
+    "family_source": "layout",
+    "co_occurrence_boost": 0.25,
+    "claim_evaluation": {
+      "is_contractor_relationship": true,
+      "claims_confidence": 0.95,
+      "claims_found": {
+        "has_client": true,
+        "has_contractor": false,
+        "references_master_agreement": true,
+        "defines_scope_of_work": false,
+        "has_effective_date": false,
+        "defines_services": false
+      },
+      "claim_scores": {
+        "has_client": 3,
+        "has_contractor": 0,
+        "references_master_agreement": 3,
+        "defines_scope_of_work": 0,
+        "has_effective_date": 0,
+        "defines_services": 0
+      },
+      "certifiable": true,
+      "critical_claims_present": true,
+      "supporting_claims_count": 3
+    },
+    "adaptive_confidence_boost": 0.075,
+    "confidence_boost": "claim_based",
+    "policy_decision": {
+      "certifiable": true,
+      "policy": "hash_only",
+      "requires_extraction": false,
+      "trusted_sources": [
+        "file_integrity"
+      ],
+      "min_confidence": 0.6,
+      "human_review_required": false,
+      "reason": "contract_claim_based",
+      "certification_method": "claim_based",
+      "details": {
+        "family": "contract",
+        "family_confidence": 0.7,
+        "note": "Family confidence not used as gate for semantic documents"
+      }
+    },
+    "certification_method": "claim_based",
+    "claims_confidence": 0.95,
+    "role_inference": {
+      "role": "contractor",
+      "confidence": 0.98,
+      "evidence_type": "hard",
+      "signals": [
+        "engagement\\s+letter",
+        "service\\s+provider",
+        "this\\s+engagement\\s+letter",
+        "engagement\\s+letter",
+        "service\\s+provider",
+        "services\\s+provided",
+        "services\\s+requested\\s+by",
+        "dear\\s+[A-Z]",
+        "fees\\s+charged"
+      ]
+    },
+    "claim_statement": "ENGAGEMENT is a contractor for Franco from 2026-01-21 (ongoing) (USD 3000.00)",
+    "extraction_skipped": "Policy does not require extraction",
+    "file_hash": "cbc6c6b2b05a3e38bae12932c20e63c84f75dcaefd2513f48572485b9d2fbe0a",
+    "canonical_hash": "4b381438850e42f752c5c5b92fb2d9e20477d77c9ff585f48a2790627d19544a",
+    "claim_hash": "317d3f1102afd87108e09a7896c3659e9d8cf1913039bcb7e9b7d1a6254f7cd1",
+    "decision": {
+      "can_certify": true,
+      "needs_human": false,
+      "confidence": 0.95,
+      "risk_level": "low",
+      "reason": "claim_based_certification",
+      "trusted_source": "file_integrity",
+      "missing_fields": [],
+      "details": {},
+      "certification_method": "claim_based"
+    }
+  },
+  "errors": [],
+  "document_family": "contract",
+  "document_subtype": "engagement_letter",
+  "certification_policy": "hash_only",
+  "inferred_role": "contractor",
+  "claim": {
+    "subject": "ENGAGEMENT",
+    "role": "contractor",
+    "entity": "Franco",
+    "start_date": "2026-01-21T00:00:00",
+    "end_date": null,
+    "amount": 3000.0,
+    "currency": "USD",
+    "services": null,
+    "evidence_type": "hard",
+    "confidence": 0.85,
+    "raw_text": "ENGAGEMENT LETTER\nEXAMPLE COMPANY\nvia jacca 6, san giorgio ionico, California, 74027\nDear Franco,\nThis Engagement Letter (“Letter”), dated 2026-01-21, confirms the services requested by Franco\n(“Client”) and provided by EXAMPLE COMPANY (“Service Provider”).\nServices. The services provided under this Letter are as follows: Pulizia caldaia\nFees. The fees charged by the Service Provider shall be $3000.00 for the entire service. All charges,\nexpenses, and fees shall be included in this price.\nRetain",
+    "extraction_method": "ner"
+  },
+  "risk_level": "low",
+  "certification_profile": "hash_only"
+}
