@@ -18,6 +18,13 @@ from .extractor import InformationExtractor
 from .validators import DocumentValidator
 from .decision_engine import DecisionEngine, CertificationProfile, RiskLevel
 from .schemas import BaseDocumentSchema
+from .layout_analyzer import LayoutAnalyzer
+from .vision_analyzer import VisionAnalyzer
+from .holder_extractor import HolderExtractor
+from .compliance_scorer import ComplianceScorer
+from .anomaly_detector import AnomalyDetector
+from .table_extractor import TableExtractor  # NEW: Professional table extraction
+from .document_parser import DocumentParser  # NEW: Intelligent document structure parsing
 
 
 class DocumentPipeline:
@@ -48,6 +55,10 @@ class DocumentPipeline:
             llm_provider: LLM provider ('openai' or 'anthropic')
         """
         self.text_extractor = TextExtractor()
+        self.layout_analyzer = LayoutAnalyzer()  # NEW: Layout analysis
+        self.vision_analyzer = VisionAnalyzer()  # NEW: Vision analysis
+        self.table_extractor = TableExtractor()  # NEW: Professional table extraction (Camelot)
+        self.document_parser = DocumentParser()  # NEW: Intelligent document structure (Unstructured)
         self.family_classifier = FamilyClassifier()  # Family classification
         self.classifier = DocumentClassifier(use_llm=use_llm)  # Type classification (optional)
         self.policy_resolver = PolicyResolver()  # Policy resolution
@@ -57,23 +68,35 @@ class DocumentPipeline:
         self.extractor = InformationExtractor(use_llm=use_llm, llm_provider=llm_provider)
         self.validator = DocumentValidator()
         self.decision_engine = DecisionEngine()
+        self.holder_extractor = HolderExtractor()  # NEW: Holder extraction
+        self.compliance_scorer = ComplianceScorer()  # NEW: Compliance scoring
+        self.anomaly_detector = AnomalyDetector()  # NEW: Anomaly detection
     
     def process(
         self,
         file_path: Union[str, Path],
         document_type: Optional[str] = None,
-        certification_profile: Optional[CertificationProfile] = None
+        certification_profile: Optional[CertificationProfile] = None,
+        requested_tasks: Optional[list] = None
     ) -> Dict[str, Any]:
         """
         Process a document through the full pipeline
         
+        Pipeline stages: OCR → Layout → Vision → LLM → Normalizer → JSON schema
+        
         Args:
             file_path: Path to document file
             document_type: Optional document type (if known, skips classification)
+            certification_profile: Optional certification profile
+            requested_tasks: Optional list of tasks to perform (classify, extract, claims, holder, compliance_score)
             
         Returns:
             Complete processing result with extracted data and metadata
         """
+        # Default tasks if not specified
+        if requested_tasks is None:
+            requested_tasks = ["classify", "extract", "claims"]
+        
         result = {
             'success': False,
             'document_type': None,
@@ -86,7 +109,7 @@ class DocumentPipeline:
         }
         
         try:
-            # STEP 1: Extract text
+            # STEP 1: OCR - Extract text
             text = self.text_extractor.extract(str(file_path))
             if not text or len(text.strip()) < 10:
                 result['errors'].append("Failed to extract text or text too short")
@@ -95,7 +118,46 @@ class DocumentPipeline:
             result['metadata']['text_length'] = len(text)
             result['metadata']['text_preview'] = text[:200] + "..." if len(text) > 200 else text
             
-            # STEP 2: Classify FAMILY (LEVEL 1 - KEY CLASSIFIER) + SUBTYPE (LEVEL 2)
+            # STEP 2: Layout Analysis
+            if "classify" in requested_tasks or "extract" in requested_tasks:
+                layout_result = self.layout_analyzer.analyze(text, str(file_path))
+                result['metadata']['layout_analysis'] = layout_result
+            
+            # STEP 2.5: Document Structure Parsing (if available)
+            if "extract" in requested_tasks and self.document_parser.available:
+                try:
+                    doc_structure = self.document_parser.parse(str(file_path))
+                    result['metadata']['document_structure'] = doc_structure
+                except Exception as e:
+                    result['metadata']['document_structure_error'] = str(e)
+            
+            # STEP 2.6: Table Extraction (if available, for compensation tables)
+            if "extract" in requested_tasks and self.table_extractor.available:
+                try:
+                    tables = self.table_extractor.extract_tables(str(file_path))
+                    if tables:
+                        result['metadata']['extracted_tables'] = [
+                            {
+                                'type': t['type'],
+                                'page': t['page'],
+                                'shape': t['shape'],
+                                'data': t['data'][:10]  # Limit data size
+                            }
+                            for t in tables
+                        ]
+                        # Try to extract compensation table specifically
+                        compensation_table = self.table_extractor.extract_compensation_table(str(file_path))
+                        if compensation_table:
+                            result['metadata']['compensation_table'] = compensation_table
+                except Exception as e:
+                    result['metadata']['table_extraction_error'] = str(e)
+            
+            # STEP 3: Vision Analysis (if requested)
+            if "vision" in requested_tasks or "classify" in requested_tasks:
+                vision_result = self.vision_analyzer.analyze(str(file_path))
+                result['metadata']['vision_analysis'] = vision_result
+            
+            # STEP 4: Classify FAMILY (LEVEL 1 - KEY CLASSIFIER) + SUBTYPE (LEVEL 2)
             family_result = self.family_classifier.classify(text)
             document_family = family_result['family']
             document_subtype = family_result.get('subtype')  # NEW: Multi-level classification
@@ -115,7 +177,7 @@ class DocumentPipeline:
                 result['human_review_required'] = True
                 return result
             
-            # STEP 3: Evaluate CLAIMS FIRST (before policy resolution)
+            # STEP 5: Evaluate CLAIMS FIRST (before policy resolution)
             # CRITICAL: Always evaluate claims, regardless of family classification
             # This allows us to override family classification if claims are strong
             claim_evaluation = self.claim_evaluator.evaluate(text, document_family.value)
@@ -193,7 +255,7 @@ class DocumentPipeline:
                     result['errors'].append(f"Document family {document_family.value} not certifiable: {policy_decision.get('reason', 'unknown')}")
                     return result
             
-            # STEP 4: Infer ROLE (NEW - for claim-based certification)
+            # STEP 6: Infer ROLE (NEW - for claim-based certification)
             role_result = self.role_inference.infer(text, document_family.value)
             result['inferred_role'] = role_result['role'].value
             result['metadata']['role_inference'] = {
@@ -203,12 +265,22 @@ class DocumentPipeline:
                 'signals': role_result['signals']
             }
             
-            # STEP 5: Extract CLAIM (NEW - the certifiable statement)
-            claim = self.claim_extractor.extract(text, role_result['role'], document_family.value)
+            # STEP 7: Extract CLAIM (NEW - the certifiable statement)
+            # Use compensation table data if available (more accurate than text extraction)
+            compensation_table_data = result.get('metadata', {}).get('compensation_table')
+            # Pass document_subtype (e.g., "professional_services_agreement") for better extraction
+            document_subtype = result.get('document_subtype')
+            claim = self.claim_extractor.extract(
+                text, 
+                role_result['role'], 
+                document_family.value,
+                compensation_table_data=compensation_table_data,
+                document_subtype=document_subtype
+            )
             result['claim'] = claim
             result['metadata']['claim_statement'] = self.claim_extractor.format_claim(claim)
             
-            # STEP 6: Extract information (ONLY if policy requires it)
+            # STEP 8: Extract information (ONLY if policy requires it)
             extracted_schema = None
             if policy_decision['requires_extraction']:
                 # Map family to document type for extraction
@@ -234,7 +306,7 @@ class DocumentPipeline:
                 result['data'] = None
                 result['metadata']['extraction_skipped'] = 'Policy does not require extraction'
             
-            # STEP 7: Use DecisionEngine for final certification decision
+            # STEP 9: Use DecisionEngine for final certification decision
             # Decision is now based on CLAIM, not just document
             # CRITICAL: Always initialize decision to avoid UnboundLocalError
             decision = {
@@ -299,7 +371,26 @@ class DocumentPipeline:
                 result['risk_level'] = 'high'
                 result['certification_profile'] = policy_decision['policy'].value
             
-            # STEP 8: Generate hash for CertiFi
+            # STEP 10: Extract holder (if requested)
+            if "holder" in requested_tasks:
+                holder_info = self.holder_extractor.extract(
+                    result.get('claim', {}),
+                    result.get('inferred_role', 'unknown'),
+                    result.get('document_family', 'unknown')
+                )
+                if holder_info:
+                    result['holder'] = holder_info
+            
+            # STEP 11: Calculate compliance score (if requested)
+            if "compliance_score" in requested_tasks:
+                compliance_score = self.compliance_scorer.calculate(result)
+                result['compliance_score'] = compliance_score
+            
+            # STEP 12: Detect anomalies (always included)
+            anomalies = self.anomaly_detector.detect(result)
+            result['anomalies'] = anomalies
+            
+            # STEP 13: Generate hash for CertiFi
             # CRITICAL: Hash is ALWAYS calculated if certifiable
             # Hash is the PROOF, certification is the DECISION to publish it
             if result['certification_ready']:

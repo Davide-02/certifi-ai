@@ -24,6 +24,7 @@ class DocumentSubtype(str, Enum):
     ENGAGEMENT_LETTER = "engagement_letter"
     STATEMENT_OF_WORK = "statement_of_work"
     INDEPENDENT_CONTRACTOR_AGREEMENT = "independent_contractor_agreement"
+    PROFESSIONAL_SERVICES_AGREEMENT = "professional_services_agreement"
     SERVICE_AGREEMENT = "service_agreement"
     NDA = "nda"
     CONTRACT_GENERIC = "contract_generic"
@@ -384,10 +385,77 @@ class FamilyClassifier:
         """
         Classify document subtype for more precise policy application
 
-        NEW: Multi-level classification
+        NEW: Multi-level classification with hierarchical priority
+        
+        Priority order:
+        1. Title matching (highest confidence) - check first 500 chars
+        2. Structure analysis (payment terms, deliverables) - excludes NDA
+        3. Keyword matching (lowest confidence) - only as fallback
         """
         if family == DocumentFamily.CONTRACT:
+            # STAGE 1: Title-based classification (highest priority)
+            # Extract title from first 500 characters (usually contains main title)
+            # Normalize: remove extra whitespace, newlines, convert to uppercase
+            title_section = re.sub(r'\s+', ' ', text[:500].upper().strip())
+            
+            # Professional Services Agreement (highest priority)
+            if re.search(r"PROFESSIONAL\s+SERVICES\s+AGREEMENT", title_section):
+                return DocumentSubtype.PROFESSIONAL_SERVICES_AGREEMENT
+            
+            # Independent Contractor Agreement
+            if re.search(r"INDEPENDENT\s+CONTRACTOR\s+AGREEMENT", title_section):
+                return DocumentSubtype.INDEPENDENT_CONTRACTOR_AGREEMENT
+            
+            # Statement of Work
+            if re.search(r"STATEMENT\s+OF\s+WORK", title_section):
+                return DocumentSubtype.STATEMENT_OF_WORK
+            
             # Engagement Letter
+            if re.search(r"ENGAGEMENT\s+LETTER", title_section) and re.search(
+                r"(?:service\s+provider|dear\s+[A-Z])", text, re.IGNORECASE
+            ):
+                return DocumentSubtype.ENGAGEMENT_LETTER
+            
+            # Service Agreement
+            if re.search(r"SERVICE\s+AGREEMENT", title_section):
+                return DocumentSubtype.SERVICE_AGREEMENT
+            
+            # NDA - ONLY if it's in the title AND no payment terms
+            if re.search(r"NON[-\s]?DISCLOSURE\s+AGREEMENT|NDA", title_section):
+                # Check if there are payment terms (excludes NDA)
+                has_payment_terms = self._has_payment_terms(text)
+                if not has_payment_terms:
+                    return DocumentSubtype.NDA
+            
+            # STAGE 2: Structure-based classification (excludes NDA if payment terms exist)
+            # Check for payment terms, deliverables, milestones (indicates service agreement, not NDA)
+            has_payment_terms = self._has_payment_terms(text)
+            has_deliverables = self._has_deliverables(text)
+            has_milestones = self._has_milestones(text)
+            
+            # If payment terms exist, it's NOT an NDA
+            if has_payment_terms or has_deliverables or has_milestones:
+                # Classify based on other signals
+                if re.search(r"independent\s+contractor", text_lower):
+                    return DocumentSubtype.INDEPENDENT_CONTRACTOR_AGREEMENT
+                elif re.search(r"statement\s+of\s+work", text_lower):
+                    return DocumentSubtype.STATEMENT_OF_WORK
+                elif re.search(r"professional\s+services", text_lower):
+                    return DocumentSubtype.PROFESSIONAL_SERVICES_AGREEMENT
+                elif re.search(r"service\s+agreement", text_lower):
+                    return DocumentSubtype.SERVICE_AGREEMENT
+                else:
+                    # Generic service agreement if payment terms exist
+                    return DocumentSubtype.SERVICE_AGREEMENT
+            
+            # STAGE 3: Keyword-based classification (fallback, lowest priority)
+            # Only check NDA if no payment terms were found
+            if not has_payment_terms:
+                # NDA - must be in title or very prominent
+                if re.search(r"non[-\s]?disclosure\s+agreement|nda", title_section):
+                    return DocumentSubtype.NDA
+            
+            # Engagement Letter (check full text)
             if re.search(r"engagement\s+letter", text_lower) and re.search(
                 r"(?:service\s+provider|dear\s+[A-Z])", text, re.IGNORECASE
             ):
@@ -404,10 +472,6 @@ class FamilyClassifier:
             # Service Agreement
             if re.search(r"service\s+agreement", text_lower):
                 return DocumentSubtype.SERVICE_AGREEMENT
-
-            # NDA
-            if re.search(r"non[-\s]?disclosure\s+agreement|nda", text_lower):
-                return DocumentSubtype.NDA
 
             return DocumentSubtype.CONTRACT_GENERIC
 

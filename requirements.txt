@@ -13,8 +13,27 @@ anthropic>=0.7.0
 
 # NLP utilities
 spacy>=3.7.0
-regex>=2023.10.3
+regex>=2023.10.3  # Keep for advanced regex features (lookbehind, recursive groups)
+
+# Document Structure & Table Extraction (HIGH PRIORITY)
+camelot-py[cv]>=0.11.0  # Professional table extraction (merge cells, complex layouts)
+unstructured[pdf]>=0.10.0  # Intelligent document parsing (headers, sections, tables, lists)
+
+# OCR Enhancement (MEDIUM PRIORITY)
+easyocr>=1.7.0  # Superior OCR, multi-language (Arabic/English), no system install needed
+
+# Date & Currency Parsing (MEDIUM PRIORITY)
+dateparser>=1.2.0  # Robust date parsing (any format)
+price-parser>=0.3.9  # Extract amounts with currency
+babel>=2.13.0  # Locale-aware number formatting
 
 # Utilities
 python-multipart>=0.0.6
 aiofiles>=23.2.0
+
+# API framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Data processing (for camelot tables)
+pandas>=2.0.0  # Required by camelot-py

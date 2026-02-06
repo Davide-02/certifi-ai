@@ -14,6 +14,14 @@ import numpy as np
 import cv2
 from .preprocessing import DocumentPreprocessor
 
+# Try to import EasyOCR (optional, better OCR)
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    easyocr = None
+
 
 class TextExtractor:
     """Extracts text from various document formats"""
@@ -61,18 +69,46 @@ class TextExtractor:
         
         return "\n\n".join(text_parts)
     
-    def _ocr_pdf(self, file_path: str) -> str:
+    def _ocr_pdf(self, file_path: str, use_easyocr: bool = False) -> str:
         """
         OCR a scanned PDF by converting pages to images
         
         Args:
             file_path: Path to PDF file
+            use_easyocr: Use EasyOCR instead of Tesseract (better accuracy, slower)
             
         Returns:
             OCR'd text
         """
         text_parts = []
         
+        # Use EasyOCR if available and requested (better for multi-language)
+        if use_easyocr and EASYOCR_AVAILABLE:
+            try:
+                # Initialize EasyOCR reader (English + Arabic for UAE documents)
+                # Specify languages explicitly to avoid warning
+                reader = easyocr.Reader(['en', 'ar'], gpu=False, verbose=False)
+                
+                doc = fitz.open(file_path)
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    # Convert page to image
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    img_array = np.array(img)
+                    
+                    # EasyOCR
+                    results = reader.readtext(img_array, detail=0)
+                    page_text = '\n'.join(results)
+                    if page_text.strip():
+                        text_parts.append(page_text)
+                
+                doc.close()
+                return "\n\n".join(text_parts)
+            except Exception as e:
+                print(f"EasyOCR failed: {e}, falling back to Tesseract")
+        
+        # Fallback to Tesseract
         try:
             doc = fitz.open(file_path)
             for page_num in range(len(doc)):
@@ -89,7 +125,7 @@ class TextExtractor:
                 if preprocessed is not None:
                     img = Image.fromarray(preprocessed)
                 
-                # OCR
+                # OCR with Tesseract
                 page_text = pytesseract.image_to_string(img, lang='ita+eng')
                 if page_text.strip():
                     text_parts.append(page_text)
@@ -100,16 +136,28 @@ class TextExtractor:
         
         return "\n\n".join(text_parts)
     
-    def extract_from_image(self, file_path: str) -> str:
+    def extract_from_image(self, file_path: str, use_easyocr: bool = False) -> str:
         """
         Extract text from image file using OCR
         
         Args:
             file_path: Path to image file
+            use_easyocr: Use EasyOCR instead of Tesseract (better accuracy, slower)
             
         Returns:
             Extracted text
         """
+        # Use EasyOCR if available and requested
+        if use_easyocr and EASYOCR_AVAILABLE:
+            try:
+                # Specify languages explicitly to avoid warning
+                reader = easyocr.Reader(['en', 'ar'], gpu=False, verbose=False)
+                results = reader.readtext(file_path, detail=0)
+                return '\n'.join(results)
+            except Exception as e:
+                print(f"EasyOCR failed: {e}, falling back to Tesseract")
+        
+        # Fallback to Tesseract
         try:
             # Preprocess image
             preprocessed = self.preprocessor.preprocess_image(file_path)
@@ -119,7 +167,7 @@ class TextExtractor:
             else:
                 img = Image.open(file_path)
             
-            # OCR
+            # OCR with Tesseract
             text = pytesseract.image_to_string(img, lang='ita+eng')
             return text
         except Exception as e:
