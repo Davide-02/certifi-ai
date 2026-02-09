@@ -4,7 +4,7 @@ Handles PDF (text + scanned) and image files
 """
 
 import os
-from typing import Optional, Union
+from typing import Optional, Union, List
 from pathlib import Path
 import pdfplumber
 import fitz  # PyMuPDF
@@ -33,6 +33,9 @@ class TextExtractor:
         """
         Extract text from PDF (handles both text-based and scanned PDFs)
         
+        IMPROVED: Uses PyMuPDF (fitz) for more reliable text extraction
+        Also extracts table-like content from text blocks
+        
         Args:
             file_path: Path to PDF file
             
@@ -41,33 +44,65 @@ class TextExtractor:
         """
         text_parts = []
         
-        # Try pdfplumber first (better for text-based PDFs)
+        # IMPROVED: Try PyMuPDF first for more reliable extraction
         try:
-            with pdfplumber.open(file_path) as pdf:
-                for page in pdf.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text_parts.append(page_text)
+            doc = fitz.open(file_path)
+            for page in doc:
+                # Use "text" mode for better extraction
+                page_text = page.get_text("text")
+                if page_text and page_text.strip():
+                    text_parts.append(page_text)
+            doc.close()
         except Exception as e:
-            print(f"pdfplumber failed: {e}")
+            print(f"PyMuPDF failed: {e}")
         
-        # If no text found, try PyMuPDF
+        # Fallback to pdfplumber if PyMuPDF didn't work
         if not text_parts:
             try:
-                doc = fitz.open(file_path)
-                for page in doc:
-                    text = page.get_text()
-                    if text.strip():
-                        text_parts.append(text)
-                doc.close()
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(page_text)
             except Exception as e:
-                print(f"PyMuPDF failed: {e}")
+                print(f"pdfplumber failed: {e}")
         
         # If still no text, it's likely a scanned PDF - use OCR
         if not text_parts or all(not t.strip() for t in text_parts):
             return self._ocr_pdf(file_path)
         
         return "\n\n".join(text_parts)
+    
+    def extract_tables_from_pdf_blocks(self, file_path: str) -> List[str]:
+        """
+        Extract table-like content from PDF using text blocks
+        
+        Uses PyMuPDF to extract text blocks that may contain tables
+        (identified by tabs or pipe separators)
+        
+        Args:
+            file_path: Path to PDF file
+            
+        Returns:
+            List of table-like text blocks
+        """
+        tables = []
+        try:
+            doc = fitz.open(file_path)
+            for page in doc:
+                # Get text blocks
+                blocks = page.get_text("blocks")
+                for block in blocks:
+                    bbox_text = block[4].strip() if len(block) > 4 else ""
+                    # Check if block looks like a table (has tabs or pipes)
+                    if bbox_text and ("\t" in bbox_text or "|" in bbox_text or 
+                                     len(bbox_text.split('\n')) > 2):
+                        tables.append(bbox_text)
+            doc.close()
+        except Exception as e:
+            print(f"Table extraction from blocks failed: {e}")
+        
+        return tables
     
     def _ocr_pdf(self, file_path: str, use_easyocr: bool = False) -> str:
         """

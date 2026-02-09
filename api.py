@@ -10,22 +10,13 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 import tempfile
 import os
+import json
+import traceback
 from pathlib import Path
 
-from pipeline.orchestrator import DocumentPipeline
+from pipeline.new_orchestrator import ProductionPipeline
 
 app = FastAPI(title="CertiFi AI API", version="1.0.0")
-
-
-class AnalyzeRequest(BaseModel):
-    """Request payload for /analyze endpoint"""
-    document_id: str = Field(..., description="Unique document identifier")
-    hash: str = Field(..., description="SHA256 hash of the document")
-    requested_tasks: List[str] = Field(
-        default=["classify", "extract", "claims"],
-        description="List of tasks to perform: classify, extract, claims, holder, compliance_score"
-    )
-    ai_version: str = Field(default="v1.0", description="AI version identifier")
 
 
 class HolderInfo(BaseModel):
@@ -48,22 +39,62 @@ class ClaimsInfo(BaseModel):
     end_date: Optional[str] = None
 
 
+class IntentInfo(BaseModel):
+    """Intent analysis information"""
+    primary_intent: str
+    secondary_intents: List[str] = Field(default_factory=list)
+    trust_role: str
+    risk_profile: str
+    confidence: float
+    explanation: Optional[str] = None
+
+
+class ProcessContextInfo(BaseModel):
+    """Process context information"""
+    business_process: str
+    compliance_domain: str
+    lifecycle_stage: str
+    recommended_actions: List[str] = Field(default_factory=list)
+    confidence: float
+    explanation: Optional[str] = None
+
+
+class SemanticRoleInfo(BaseModel):
+    """Semantic Role information"""
+    role_type: str
+    entity_type: str  # "individual" or "organization"
+    name: str
+    confidence: float
+    evidence: str
+
+
+class RolesInfo(BaseModel):
+    """Roles extraction result"""
+    roles: List[Dict[str, Any]]  # Flexible structure
+    primary_holder: Optional[Dict[str, Any]] = None
+    confidence: float
+
+
 class AnalyzeResponse(BaseModel):
     """Response payload for /analyze endpoint"""
     model_config = ConfigDict(extra="allow")  # Permetti campi extra per flessibilità
     
     document_family: str
     document_type: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     holder: Optional[HolderInfo] = None
     claims: Optional[ClaimsInfo] = None
     compliance_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    intent: Optional[IntentInfo] = None  # NEW: Intent & Ontology Layer
+    process_context: Optional[ProcessContextInfo] = None  # NEW: Process Context Layer
+    roles: Optional[RolesInfo] = None  # NEW: Deterministic Roles Extraction
     anomalies: List[str] = Field(default_factory=list)
 
 
 @app.post("/analyze")
 async def analyze_document(
     document_id: str = Form(...),
-    hash: str = Form(...),  # Nome del campo form, non conflitto con Python built-in qui
+    hash: str = Form(default=""),  # Hash parameter (ignored, not used)
     requested_tasks: str = Form(default="classify,extract,claims"),
     ai_version: str = Form(default="v1.0"),
     file: UploadFile = File(...)
@@ -77,7 +108,7 @@ async def analyze_document(
     Args:
         document_id: Unique document identifier
         document_hash: SHA256 hash of the document (sent as 'hash' in form data)
-        requested_tasks: Comma-separated list of tasks (classify, extract, claims, holder, compliance_score)
+        requested_tasks: Comma-separated list of tasks (classify, extract, claims, holder, roles, compliance_score, intent, process_context)
         ai_version: AI version identifier
         file: Document file (PDF, image, etc.)
     
@@ -95,13 +126,20 @@ async def analyze_document(
             tmp_path = tmp_file.name
         
         try:
-            # Initialize pipeline
-            pipeline = DocumentPipeline(use_llm="llm" in tasks or "vision" in tasks)
+            # Initialize pipeline (using new ProductionPipeline with all 6 layers)
+            pipeline = ProductionPipeline(use_llm="llm" in tasks or "vision" in tasks)
             
             # Process document with requested tasks
+            # Automatically includes intent and process_context if "classify" is requested
+            if "classify" in tasks:
+                # Ensure intent and process_context are included
+                if "intent" not in tasks:
+                    tasks.append("intent")
+                if "process_context" not in tasks:
+                    tasks.append("process_context")
+            
             result = pipeline.process(
                 file_path=tmp_path,
-                certification_profile=None,
                 requested_tasks=tasks
             )
             
@@ -114,42 +152,222 @@ async def analyze_document(
                 # Fallback to family if no subtype
                 document_type = result.get("document_family", "unknown")
             
+            # STRUCTURED JSON RESPONSE - Build exact structure as requested
+            perception_meta = result.get("metadata", {}).get("perception", {})
+            text_length = perception_meta.get("text_length", 0)
+            has_tables = perception_meta.get("has_tables", False)
+            detected_language = perception_meta.get("detected_language", "unknown")
+            
+            # Extract fields that were successfully extracted
+            extracted_fields = []
+            claims_data = _extract_claims(result)
+            if claims_data.get("amount") is not None:
+                extracted_fields.append("amount")
+            if claims_data.get("currency"):
+                extracted_fields.append("currency")
+            if claims_data.get("subject"):
+                extracted_fields.append("subject")
+            if claims_data.get("entity"):
+                extracted_fields.append("entity")
+            if claims_data.get("start_date"):
+                extracted_fields.append("start_date")
+            if claims_data.get("end_date"):
+                extracted_fields.append("end_date")
+            
+            # Build structured response
             response_data = {
+                "document_id": document_id,
+                "file_name": file.filename or "unknown",
                 "document_family": result.get("document_family", "unknown"),
                 "document_type": document_type,
             }
             
-            # Extract holder information if requested (already extracted by pipeline)
-            if "holder" in tasks and result.get("holder"):
-                response_data["holder"] = result["holder"]
+            # Extract holder with required structure { type, name, role_type, confidence }
+            holder_data = None
+            if "holder" in tasks or "roles" in tasks:
+                # Try to get holder from roles extraction first
+                roles_data = result.get("roles", {})
+                primary_holder = roles_data.get("primary_holder") if isinstance(roles_data, dict) else None
+                
+                if primary_holder:
+                    holder_data = {
+                        "type": primary_holder.get("entity_type", "unknown"),
+                        "name": primary_holder.get("name", ""),
+                        "role_type": primary_holder.get("role_type", "unknown"),
+                        "confidence": primary_holder.get("confidence", 0.0)
+                    }
+                elif result.get("holder"):
+                    # Fallback to legacy holder extraction
+                    legacy_holder = result.get("holder")
+                    holder_data = {
+                        "type": legacy_holder.get("type", "unknown"),
+                        "name": legacy_holder.get("name", ""),
+                        "role_type": legacy_holder.get("role", "unknown"),
+                        "confidence": legacy_holder.get("confidence", 0.0)
+                    }
             
-            # Extract claims if requested (already extracted by pipeline)
+            response_data["holder"] = holder_data
+            
+            # Extract roles with structure: { roles: [...], primary_holder: {...}, confidence: 0.95 }
+            roles_structure = {"roles": [], "primary_holder": None, "confidence": 0.0}
+            if "roles" in tasks or "holder" in tasks:
+                roles_data = result.get("roles", {})
+                if isinstance(roles_data, dict) and roles_data.get("roles"):
+                    roles_list = roles_data["roles"]
+                    primary_holder_info = roles_data.get("primary_holder")
+                    
+                    # Build roles array
+                    roles_array = []
+                    for role in roles_list:
+                        role_obj = {
+                            "role_type": role.get("role_type", "unknown"),
+                            "entity_type": role.get("entity_type", "unknown"),
+                            "name": role.get("name", ""),
+                            "contact_info": {
+                                "email": role.get("contact_info", {}).get("email") if isinstance(role.get("contact_info"), dict) else None,
+                                "phone": role.get("contact_info", {}).get("phone") if isinstance(role.get("contact_info"), dict) else None
+                            },
+                            "confidence": role.get("confidence", 0.0)
+                        }
+                        roles_array.append(role_obj)
+                    
+                    # Extract primary_holder (from roles_data or from holder_data)
+                    primary_holder_obj = None
+                    if primary_holder_info:
+                        primary_holder_obj = {
+                            "role_type": primary_holder_info.get("role_type", "unknown"),
+                            "entity_type": primary_holder_info.get("entity_type", "unknown"),
+                            "name": primary_holder_info.get("name", ""),
+                            "confidence": primary_holder_info.get("confidence", 0.0)
+                        }
+                    elif holder_data:
+                        # Fallback to holder_data if primary_holder not in roles_data
+                        primary_holder_obj = {
+                            "role_type": holder_data.get("role_type", "unknown"),
+                            "entity_type": holder_data.get("type", "unknown"),
+                            "name": holder_data.get("name", ""),
+                            "confidence": holder_data.get("confidence", 0.0)
+                        }
+                    
+                    # Get overall confidence from roles_data or calculate from roles
+                    overall_confidence = roles_data.get("confidence", 0.0)
+                    if overall_confidence == 0.0 and roles_array:
+                        # Calculate average confidence if not provided
+                        confidences = [r.get("confidence", 0.0) for r in roles_array]
+                        overall_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+                    
+                    roles_structure = {
+                        "roles": roles_array,
+                        "primary_holder": primary_holder_obj,
+                        "confidence": overall_confidence
+                    }
+            
+            response_data["roles"] = roles_structure
+            
+            # Extract claims as single object: { claim_type, is_contractor, amount, currency, subject, entity, start_date, end_date }
+            claims_object = None
             if "claims" in tasks:
                 claims_info = _extract_claims(result)
-                # Always include claims_info (even if empty/None fields) so client can see what was extracted
-                response_data["claims"] = claims_info
+                # Determine claim_type based on document type
+                claim_type = "service_agreement"
+                if result.get("document_subtype") == "resume":
+                    claim_type = "resume"
+                elif result.get("document_family") == "invoice":
+                    claim_type = "invoice"
+                elif result.get("document_family") == "certificate":
+                    claim_type = "certificate"
+                
+                # Always create claims object if claims task was requested
+                claims_object = {
+                    "claim_type": claim_type,
+                    "is_contractor": claims_info.get("is_contractor"),
+                    "amount": claims_info.get("amount"),
+                    "currency": claims_info.get("currency"),
+                    "subject": claims_info.get("subject"),
+                    "entity": claims_info.get("entity"),
+                    "start_date": claims_info.get("start_date"),
+                    "end_date": claims_info.get("end_date")
+                }
             
-            # Calculate compliance score if requested (already calculated by pipeline)
-            if "compliance_score" in tasks and result.get("compliance_score") is not None:
-                response_data["compliance_score"] = result["compliance_score"]
+            response_data["claims"] = claims_object
             
-            # Detect anomalies (always included, already detected by pipeline)
-            if result.get("anomalies"):
-                response_data["anomalies"] = result["anomalies"]
-            else:
-                response_data["anomalies"] = []
+            # Compliance score
+            response_data["compliance_score"] = result.get("compliance_score") if "compliance_score" in tasks else None
+            
+            # Risk profile (extract from intent)
+            risk_profile = "medium"
+            if "intent" in tasks and result.get("intent"):
+                risk_profile = result.get("intent", {}).get("risk_profile", "medium")
+            response_data["risk_profile"] = risk_profile
+            
+            # Intent: { primary_intent, secondary_intents, trust_role, confidence, risk_profile }
+            intent_data = None
+            if "intent" in tasks and result.get("intent"):
+                intent_raw = result.get("intent", {})
+                intent_data = {
+                    "primary_intent": intent_raw.get("primary_intent", "unknown"),
+                    "secondary_intents": intent_raw.get("secondary_intents", []),
+                    "trust_role": intent_raw.get("trust_role", "unknown"),
+                    "confidence": intent_raw.get("confidence", 0.0),
+                    "risk_profile": intent_raw.get("risk_profile", "medium")
+                }
+            response_data["intent"] = intent_data
+            
+            # Process context: { business_process, compliance_domain, lifecycle_stage, recommended_actions, confidence }
+            process_context_data = None
+            if "process_context" in tasks and result.get("process_context"):
+                process_raw = result.get("process_context", {})
+                process_context_data = {
+                    "business_process": process_raw.get("business_process", "unknown"),
+                    "compliance_domain": process_raw.get("compliance_domain", "unknown"),
+                    "lifecycle_stage": process_raw.get("lifecycle_stage", "creation"),
+                    "recommended_actions": process_raw.get("recommended_actions", []),
+                    "confidence": process_raw.get("confidence", 0.0)
+                }
+            response_data["process_context"] = process_context_data
+            
+            # Metadata: { text_length, has_tables, detected_language, extracted_fields }
+            response_data["metadata"] = {
+                "text_length": text_length,
+                "has_tables": has_tables,
+                "detected_language": detected_language,
+                "extracted_fields": extracted_fields
+            }
+            
+            # Log response in console
+            print("\n" + "="*80)
+            print("📤 RISPOSTA API INVIATA")
+            print("="*80)
+            print(json.dumps(response_data, indent=2, default=str))
+            print("="*80 + "\n")
             
             # Validazione flessibile della risposta
             try:
-                return AnalyzeResponse(**response_data)
-            except Exception as validation_error:
-                # Se la validazione fallisce, restituisci comunque i dati con campi opzionali
+                # Crea l'oggetto response per validazione
+                response_obj = AnalyzeResponse(**response_data)
+                # Converti in dict includendo tutti i campi (anche None)
+                response_dict = response_obj.model_dump(exclude_none=False, mode='json')
+                # Assicurati che roles sia incluso anche se None o vuoto
+                if "roles" in response_data:
+                    response_dict["roles"] = response_data["roles"]
                 return JSONResponse(
                     status_code=200,
-                    content={
-                        **response_data,
-                        "_validation_warning": str(validation_error)
-                    }
+                    content=response_dict
+                )
+            except Exception as validation_error:
+                # Se la validazione fallisce, restituisci comunque i dati con campi opzionali
+                error_response = {
+                    **response_data,
+                    "_validation_warning": str(validation_error)
+                }
+                print("\n" + "="*80)
+                print("⚠️  RISPOSTA CON WARNING DI VALIDAZIONE")
+                print("="*80)
+                print(json.dumps(error_response, indent=2, default=str))
+                print("="*80 + "\n")
+                return JSONResponse(
+                    status_code=200,
+                    content=error_response
                 )
             
         finally:
@@ -160,43 +378,11 @@ async def analyze_document(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
         error_detail = {
             "error": str(e),
             "traceback": traceback.format_exc()
         }
         raise HTTPException(status_code=500, detail=error_detail)
-
-
-def _extract_holder(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Extract holder information from pipeline result"""
-    claim = result.get("claim", {})
-    role = result.get("inferred_role", "unknown")
-    
-    if not claim or role == "unknown":
-        return None
-    
-    # Determine holder type based on role
-    holder_type = "relationship"
-    if role in ["contractor", "employee", "student"]:
-        holder_type = "individual"
-    elif role in ["client", "company"]:
-        holder_type = "entity"
-    
-    # Generate reference hash from claim
-    import hashlib
-    import json
-    claim_ref = json.dumps(claim, default=str, sort_keys=True)
-    ref_hash = hashlib.sha256(claim_ref.encode()).hexdigest()
-    
-    # Calculate confidence from claim confidence
-    confidence = claim.get("confidence", 0.0)
-    
-    return {
-        "type": holder_type,
-        "ref": f"rel:sha256({ref_hash[:16]}...)",
-        "confidence": confidence
-    }
 
 
 def _extract_claims(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -234,67 +420,6 @@ def _extract_claims(result: Dict[str, Any]) -> Dict[str, Any]:
     }
     
     return claims_info
-
-
-def _calculate_compliance_score(result: Dict[str, Any]) -> float:
-    """Calculate compliance score from pipeline result"""
-    # Base score from certification readiness
-    base_score = 0.0
-    
-    if result.get("certification_ready", False):
-        base_score = 0.8
-    elif result.get("human_review_required", True):
-        base_score = 0.5
-    
-    # Adjust based on confidence
-    confidence = result.get("metadata", {}).get("decision", {}).get("confidence", 0.0)
-    if confidence > 0:
-        base_score = (base_score + confidence) / 2
-    
-    # Adjust based on risk level
-    risk_level = result.get("risk_level", "high")
-    risk_multiplier = {
-        "low": 1.0,
-        "medium": 0.9,
-        "high": 0.7
-    }.get(risk_level.lower(), 0.7)
-    
-    final_score = base_score * risk_multiplier
-    
-    # Ensure score is between 0 and 1
-    return max(0.0, min(1.0, final_score))
-
-
-def _detect_anomalies(result: Dict[str, Any]) -> List[str]:
-    """Detect anomalies in the analysis result"""
-    anomalies = []
-    
-    # Check for errors
-    errors = result.get("errors", [])
-    if errors:
-        anomalies.extend([f"Error: {e}" for e in errors])
-    
-    # Check for low confidence
-    confidence = result.get("metadata", {}).get("decision", {}).get("confidence", 0.0)
-    if confidence < 0.5:
-        anomalies.append(f"Low confidence score: {confidence:.2f}")
-    
-    # Check for missing critical fields
-    missing_fields = result.get("metadata", {}).get("decision", {}).get("missing_fields", [])
-    if missing_fields:
-        anomalies.append(f"Missing critical fields: {', '.join(missing_fields)}")
-    
-    # Check for high risk level
-    risk_level = result.get("risk_level", "high")
-    if risk_level.lower() == "high":
-        anomalies.append("High risk level detected")
-    
-    # Check for family classification issues
-    family_confidence = result.get("metadata", {}).get("family_confidence", 0.0)
-    if family_confidence < 0.5:
-        anomalies.append(f"Low family classification confidence: {family_confidence:.2f}")
-    
-    return anomalies
 
 
 @app.get("/health")

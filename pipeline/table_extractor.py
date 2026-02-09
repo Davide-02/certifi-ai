@@ -51,6 +51,8 @@ class TableExtractor:
         """
         Extract tables from PDF
         
+        IMPROVED: Also uses PyMuPDF for table-like blocks as fallback
+        
         Args:
             file_path: Path to PDF file
             pages: Page numbers (e.g., '1', '1-3', 'all'). Default: all pages
@@ -59,47 +61,148 @@ class TableExtractor:
         Returns:
             List of extracted tables as dictionaries
         """
-        if not self.available:
-            return []
+        extracted_tables = []
         
-        try:
-            # Extract tables
-            tables = camelot.read_pdf(file_path, pages=pages or 'all', flavor=flavor)
-            
-            extracted_tables = []
-            for i, table in enumerate(tables):
-                # Convert to dictionary
-                df = table.df
+        # Try Camelot first (best for structured tables)
+        if self.available:
+            try:
+                # Extract tables
+                tables = camelot.read_pdf(file_path, pages=pages or 'all', flavor=flavor)
                 
-                # Try to detect table type (compensation, parties, etc.)
-                table_type = self._detect_table_type(df)
-                
-                # Convert DataFrame to dict (if pandas available)
-                if PANDAS_AVAILABLE and df is not None:
-                    try:
-                        data_dict = df.to_dict('records')  # List of dicts
-                        shape = df.shape  # (rows, cols)
-                    except Exception:
+                for i, table in enumerate(tables):
+                    # Convert to dictionary
+                    df = table.df
+                    
+                    # Try to detect table type (compensation, parties, etc.)
+                    table_type = self._detect_table_type(df)
+                    
+                    # Convert DataFrame to dict (if pandas available)
+                    if PANDAS_AVAILABLE and df is not None:
+                        try:
+                            data_dict = df.to_dict('records')  # List of dicts
+                            shape = df.shape  # (rows, cols)
+                        except Exception:
+                            data_dict = []
+                            shape = (0, 0)
+                    else:
                         data_dict = []
                         shape = (0, 0)
-                else:
-                    data_dict = []
-                    shape = (0, 0)
+                    
+                    extracted_tables.append({
+                        'table_index': i,
+                        'page': table.page,
+                        'accuracy': table.accuracy,
+                        'type': table_type,
+                        'data': data_dict,
+                        'shape': shape,
+                    })
                 
-                extracted_tables.append({
-                    'table_index': i,
-                    'page': table.page,
-                    'accuracy': table.accuracy,
-                    'type': table_type,
-                    'data': data_dict,
-                    'shape': shape,
-                })
-            
-            return extracted_tables
-            
+                return extracted_tables
+                
+            except Exception as e:
+                print(f"⚠️  Error extracting tables with Camelot: {e}")
+        
+        # FALLBACK: Use PyMuPDF to extract table-like blocks
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(file_path)
+            for page_num, page in enumerate(doc):
+                blocks = page.get_text("blocks")
+                for block in blocks:
+                    bbox_text = block[4].strip() if len(block) > 4 else ""
+                    # Check if block looks like a table (has tabs, pipes, or multiple rows)
+                    if bbox_text and ("\t" in bbox_text or "|" in bbox_text or 
+                                     len(bbox_text.split('\n')) > 2):
+                        # Try to parse as table
+                        lines = bbox_text.split('\n')
+                        if len(lines) >= 2:
+                            # Convert to dict format
+                            table_data = []
+                            for line in lines:
+                                if line.strip():
+                                    # Split by tab or pipe
+                                    if "\t" in line:
+                                        row = [cell.strip() for cell in line.split("\t")]
+                                    elif "|" in line:
+                                        row = [cell.strip() for cell in line.split("|")]
+                                    else:
+                                        row = [line.strip()]
+                                    
+                                    if row:
+                                        table_data.append(row)
+                            
+                            if table_data:
+                                extracted_tables.append({
+                                    'table_index': len(extracted_tables),
+                                    'page': page_num + 1,
+                                    'accuracy': 0.7,  # Lower confidence for block-based extraction
+                                    'type': 'text_block',
+                                    'data': table_data,
+                                    'shape': (len(table_data), len(table_data[0]) if table_data else 0),
+                                })
+            doc.close()
         except Exception as e:
-            print(f"⚠️  Error extracting tables with Camelot: {e}")
-            return []
+            print(f"⚠️  Error extracting tables with PyMuPDF blocks: {e}")
+        
+        return extracted_tables
+    
+    def extract_tables_from_pdf_blocks(self, file_path: str) -> List[Dict[str, Any]]:
+        """
+        Extract table-like content from PDF using PyMuPDF text blocks
+        
+        IMPROVED: Uses PyMuPDF to extract text blocks that may contain tables
+        (identified by tabs or pipe separators)
+        
+        Args:
+            file_path: Path to PDF file
+            
+        Returns:
+            List of table-like text blocks as dictionaries
+        """
+        tables = []
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(file_path)
+            for page_num, page in enumerate(doc):
+                # Get text blocks
+                blocks = page.get_text("blocks")
+                for block in blocks:
+                    bbox_text = block[4].strip() if len(block) > 4 else ""
+                    # Check if block looks like a table (has tabs, pipes, or multiple rows)
+                    if bbox_text and ("\t" in bbox_text or "|" in bbox_text or 
+                                     len(bbox_text.split('\n')) > 2):
+                        # Try to parse as table
+                        lines = bbox_text.split('\n')
+                        if len(lines) >= 2:
+                            # Convert to dict format
+                            table_data = []
+                            for line in lines:
+                                if line.strip():
+                                    # Split by tab or pipe
+                                    if "\t" in line:
+                                        row = [cell.strip() for cell in line.split("\t")]
+                                    elif "|" in line:
+                                        row = [cell.strip() for cell in line.split("|")]
+                                    else:
+                                        row = [line.strip()]
+                                    
+                                    if row:
+                                        table_data.append(row)
+                            
+                            if table_data:
+                                tables.append({
+                                    'table_index': len(tables),
+                                    'page': page_num + 1,
+                                    'accuracy': 0.7,  # Lower confidence for block-based extraction
+                                    'type': 'text_block',
+                                    'data': table_data,
+                                    'shape': (len(table_data), len(table_data[0]) if table_data else 0),
+                                })
+            doc.close()
+        except Exception as e:
+            print(f"⚠️  Error extracting tables with PyMuPDF blocks: {e}")
+        
+        return tables
     
     def _detect_table_type(self, df) -> str:
         """Detect table type based on content"""
@@ -148,7 +251,11 @@ class TableExtractor:
         return None
     
     def _parse_compensation_table(self, df) -> Dict[str, Any]:
-        """Parse compensation table into structured data"""
+        """
+        Parse compensation table into structured data
+        
+        IMPROVED: Looks for "Annual Contract Value" explicitly and extracts multi-currency amounts
+        """
         compensation = {
             'annual_total': None,
             'monthly_total': None,
@@ -162,25 +269,70 @@ class TableExtractor:
         if not PANDAS_AVAILABLE or df is None:
             return compensation
         
+        # Detect if table has multi-currency columns (AED and USD)
+        has_usd_column = False
+        aed_column_idx = None
+        usd_column_idx = None
+        
+        # Check header row for currency columns
+        if len(df.columns) > 0:
+            header_row = df.iloc[0] if len(df) > 0 else None
+            if header_row is not None:
+                for idx, cell in enumerate(header_row):
+                    cell_str = str(cell).upper()
+                    if 'AED' in cell_str or 'DIRHAM' in cell_str:
+                        aed_column_idx = idx
+                    elif 'USD' in cell_str or 'DOLLAR' in cell_str:
+                        usd_column_idx = idx
+                        has_usd_column = True
+                        compensation['secondary_currency'] = 'USD'
+        
         # Try to extract amounts from table
-        # This is a basic implementation - can be enhanced based on actual table structure
         for _, row in df.iterrows():
             row_text = ' '.join(str(cell).lower() for cell in row)
             
-            # Look for annual total
-            if 'annual' in row_text or 'yearly' in row_text:
-                # Extract amount from row
+            # PRIORITY 1: Look for "Annual Contract Value" (highest priority)
+            if 'annual contract value' in row_text or ('annual' in row_text and 'contract' in row_text and 'value' in row_text):
                 amounts = self._extract_amounts_from_row(row)
                 if amounts:
-                    compensation['annual_total'] = max(amounts)
+                    # Get the largest amount (likely the annual total)
+                    largest_amount = max(amounts)
+                    compensation['annual_total'] = largest_amount
+                    
+                    # If we have USD column, extract secondary amount
+                    if has_usd_column and usd_column_idx is not None and usd_column_idx < len(row):
+                        usd_cell = row.iloc[usd_column_idx] if hasattr(row, 'iloc') else row[usd_column_idx]
+                        usd_amounts = self._extract_amounts_from_row([usd_cell])
+                        if usd_amounts:
+                            compensation['secondary_amounts']['annual_total'] = max(usd_amounts)
             
-            # Look for monthly total
+            # PRIORITY 2: Look for annual total (fallback)
+            elif ('annual' in row_text or 'yearly' in row_text) and 'total' in row_text:
+                amounts = self._extract_amounts_from_row(row)
+                if amounts and not compensation['annual_total']:  # Only if not already set
+                    compensation['annual_total'] = max(amounts)
+                    
+                    # Extract USD if available
+                    if has_usd_column and usd_column_idx is not None and usd_column_idx < len(row):
+                        usd_cell = row.iloc[usd_column_idx] if hasattr(row, 'iloc') else row[usd_column_idx]
+                        usd_amounts = self._extract_amounts_from_row([usd_cell])
+                        if usd_amounts:
+                            compensation['secondary_amounts']['annual_total'] = max(usd_amounts)
+            
+            # PRIORITY 3: Look for monthly total
             elif 'monthly' in row_text and 'total' in row_text:
                 amounts = self._extract_amounts_from_row(row)
                 if amounts:
                     compensation['monthly_total'] = max(amounts)
+                    
+                    # Extract USD if available
+                    if has_usd_column and usd_column_idx is not None and usd_column_idx < len(row):
+                        usd_cell = row.iloc[usd_column_idx] if hasattr(row, 'iloc') else row[usd_column_idx]
+                        usd_amounts = self._extract_amounts_from_row([usd_cell])
+                        if usd_amounts:
+                            compensation['secondary_amounts']['monthly_total'] = max(usd_amounts)
             
-            # Look for base fee
+            # PRIORITY 4: Look for base fee
             elif 'base' in row_text or 'base fee' in row_text:
                 amounts = self._extract_amounts_from_row(row)
                 if amounts:

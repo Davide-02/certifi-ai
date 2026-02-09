@@ -26,7 +26,7 @@ fi
 
 FILE_PATH="$1"
 DOCUMENT_ID="${2:-doc_$(date +%s)}"
-REQUESTED_TASKS="${3:-classify,extract,claims,holder,compliance_score}"
+REQUESTED_TASKS="${3:-classify,extract,claims,holder,roles,compliance_score}"
 
 # Verifica che il file esista
 if [ ! -f "$FILE_PATH" ]; then
